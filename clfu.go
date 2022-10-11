@@ -92,6 +92,46 @@ func (lfu *LFUCache) SetMaxSize(size uint) {
 	lfu.maxSize = size
 }
 
+// evict the least recently used element from the cache, this function is unsafe to be called externally
+// because it doesn't provide locking mechanism.
+func (lfu *LFUCache) unsafeEvict() error {
+	// WARNING: This function assumes that a write lock has been held by the caller already
+
+	// get the head node of the list
+	headFreq := lfu.frequencies.Front()
+	if headFreq == nil {
+		// list is empty, this is a very unusual condition
+		return fmt.Errorf("internal error: failed to evict, empty frequency list")
+	}
+
+	headFreqInner := (headFreq.Value).(*FrequencyNode)
+
+	if headFreqInner.valuesList.Len() == 0 {
+		// again this is a very unusual condition
+		return fmt.Errorf("internal error: failed to evict, empty values list")
+	}
+
+	headValuesList := headFreqInner.valuesList
+	// pop the head of this this values list
+	headValueNode := headValuesList.Front()
+	removeResult := headValuesList.Remove(headValueNode).(*KeyRefNode)
+
+	// update the values list
+	headFreqInner.valuesList = headValuesList
+
+	if headFreqInner.valuesList.Len() == 0 && headFreqInner.count > 1 {
+		// this node can be removed from the frequency list
+		freqList := lfu.frequencies
+		freqList.Remove(headFreq)
+		lfu.frequencies = freqList
+	}
+
+	// remove the key from lookup table
+	key := removeResult.keyRef
+	delete(lfu.lookupTable, *key)
+	return nil
+}
+
 func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 	// get write lock
 	lfu.rwLock.Lock()
@@ -138,36 +178,12 @@ func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 	return nil
 }
 
-// evict the least recently used element from the cache, this function is unsafe to be called externally
-// because it doesn't provide locking mechanism.
-func (lfu *LFUCache) unsafeEvict() error {
-	// WARNING: This function assumes that a write lock has been held by the caller already
-	// get the head node of the list
-	headFreq := lfu.frequencies.Front()
-	if headFreq == nil {
-		// list is empty, this is a very unusual condition
-		return fmt.Errorf("internal error: failed to evict, empty frequency list")
-	}
+// Evict can be called to manually perform eviction
+func (lfu *LFUCache) Evict() error {
+	lfu.rwLock.Lock()
+	defer lfu.rwLock.Unlock()
 
-	headFreqInner := (headFreq.Value).(*FrequencyNode)
-
-	if headFreqInner.valuesList.Len() == 0 {
-		// again this is a very unusual condition
-		return fmt.Errorf("internal error: failed to evict, empty values list")
-	}
-
-	headValuesList := headFreqInner.valuesList
-	// pop the head of this this values list
-	headValueNode := headValuesList.Front()
-	removeResult := headValuesList.Remove(headValueNode).(*KeyRefNode)
-
-	// update the values list
-	headFreqInner.valuesList = headValuesList
-
-	// remove the key from lookup table
-	key := removeResult.keyRef
-	delete(lfu.lookupTable, *key)
-	return nil
+	return lfu.unsafeEvict()
 }
 
 // create a new instance of LFU cache
