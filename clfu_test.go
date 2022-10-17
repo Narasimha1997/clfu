@@ -136,3 +136,41 @@ func TestManualEvict(t *testing.T) {
 		}
 	}
 }
+
+func TestDelete(t *testing.T) {
+	// create a new LFU cache with size=10
+	lfu := clfu.NewLFUCache(10)
+
+	// insert 1000 elements with replace=false
+	for i := 1; i <= 1000; i++ {
+		err := lfu.Put(i, i, false)
+		if err != nil {
+			t.Fatalf("error while inserting key value paris to LFU cache, error=%s", err.Error())
+		}
+	}
+
+	// verify the elements inserted
+	if lfu.CurrentSize() != 10 {
+		t.Fatalf("expected size of LFU cache was 10, but got %d", lfu.CurrentSize())
+	}
+
+	// delete the odd  elements
+	for i := 1; i <= 10; i++ {
+		if i&1 == 1 {
+			err := lfu.Delete(990 + i)
+			if err != nil {
+				t.Fatalf("error while deleting value from the cache, error=%s", err.Error())
+			}
+		}
+	}
+
+	// verify the presence of even elements
+	for i := 1; i <= 10; i++ {
+		if i&1 == 0 {
+			_, found := lfu.Get(i + 990)
+			if !found {
+				t.Fatalf("expected key %d to be present in the cache, but it is not found", i+990)
+			}
+		}
+	}
+}
