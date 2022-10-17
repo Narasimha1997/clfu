@@ -305,3 +305,53 @@ func TestConcurrentGet(t *testing.T) {
 		t.Fatalf("expected all the elements to be accessed 400 times")
 	}
 }
+
+func BenchmarkPut(b *testing.B) {
+	lfu := clfu.NewLFUCache(1000)
+	// insert 10M elements
+	for i := 0; i < b.N; i++ {
+		lfu.Put(i, i, false)
+	}
+}
+
+func BenchmarkConcurrentPut(b *testing.B) {
+	lfu := clfu.NewLFUCache(1000)
+
+	i := 0
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+
+			lfu.Put(i, i, false)
+			i++
+		}
+	})
+}
+
+func BenchmarkGetOperation(b *testing.B) {
+	lfu := clfu.NewLFUCache(100)
+	for i := 0; i < 100; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	for i := 0; i < b.N; i++ {
+		lfu.Get(i % 100)
+	}
+}
+
+func BenchmarkConcurrentGet(b *testing.B) {
+	lfu := clfu.NewLFUCache(100)
+	for i := 0; i < 100; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	i := 0
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+
+			lfu.Get(i % 100)
+			i++
+		}
+	})
+}
