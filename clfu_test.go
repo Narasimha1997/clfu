@@ -94,3 +94,45 @@ func TestComplexStructPutAndGet(t *testing.T) {
 		t.Fatalf("improper value read from the cache")
 	}
 }
+
+func TestManualEvict(t *testing.T) {
+	// create a new LFU cache with size=10
+	lfu := clfu.NewLFUCache(10)
+
+	// insert 1000 elements with replace=false
+	for i := 1; i <= 1000; i++ {
+		err := lfu.Put(i, i, false)
+		if err != nil {
+			t.Fatalf("error while inserting key value paris to LFU cache, error=%s", err.Error())
+		}
+	}
+
+	// verify the elements inserted
+	if lfu.CurrentSize() != 10 {
+		t.Fatalf("expected size of LFU cache was 10, but got %d", lfu.CurrentSize())
+	}
+
+	// increase the frequency of last 5 elements
+	for i := 991; i <= 995; i++ {
+		lfu.Get(i)
+	}
+
+	// now evict times
+	for i := 0; i < 5; i++ {
+		lfu.Evict()
+	}
+
+	// verify the elements inserted
+	if lfu.CurrentSize() != 5 {
+		t.Fatalf("expected size of LFU cache was 5, but got %d", lfu.CurrentSize())
+	}
+
+	// now the remaining elements from 991 to 994
+	allElements := lfu.AsSlice()
+	for i := 0; i < 5; i++ {
+		value := (*(*allElements)[i].Value).(int)
+		if value != (i + 991) {
+			t.Fatalf("invalid value in the cache, expected %d, but got %d", i+991, value)
+		}
+	}
+}
