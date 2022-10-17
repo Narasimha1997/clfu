@@ -9,6 +9,12 @@ import (
 type ValueType interface{}
 type KeyType interface{}
 
+type KeyValueEntry struct {
+	Key       *KeyType
+	Value     *ValueType
+	Frequency uint
+}
+
 // FrequencyNode represents a node in the frequency linked list
 type FrequencyNode struct {
 	// frequency count - never decreases
@@ -144,7 +150,7 @@ func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 			return nil
 		}
 
-		return fmt.Errorf("inserting a new entry to the cache exceeds the max size %d", lfu.maxSize)
+		return fmt.Errorf("key %v already found in the cache", key)
 	}
 
 	if lfu.maxSize == uint(len(lfu.lookupTable)) {
@@ -187,12 +193,12 @@ func (lfu *LFUCache) Evict() error {
 }
 
 // Get can be called to obtain the value for given key
-func (lfu *LFUCache) Get(key *interface{}) (*ValueType, bool) {
+func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
 
 	// check if data is in the map
-	valueNode, found := lfu.lookupTable[*key]
+	valueNode, found := lfu.lookupTable[key]
 	if !found {
 		return nil, false
 	}
@@ -206,9 +212,9 @@ func (lfu *LFUCache) Get(key *interface{}) (*ValueType, bool) {
 	if nextParentFreqNode == nil {
 		// this is the last node
 		// create a new node with frequency + 1
-		newFreqNode := NewFrequencyNode(currentNode.count)
+		newFreqNode := NewFrequencyNode(currentNode.count + 1)
 		lfu.frequencies.PushBack(newFreqNode)
-		newParent = nextParentFreqNode.Next()
+		newParent = parentFreqNode.Next()
 
 	} else {
 		nextNode := nextParentFreqNode.Value.(*FrequencyNode)
@@ -223,13 +229,120 @@ func (lfu *LFUCache) Get(key *interface{}) (*ValueType, bool) {
 		}
 	}
 
-	newParentNode := newParent.Value.(*FrequencyNode)
-	valueNode.parentFreqNode = newParent
-	newParentNode.valuesList.PushBack(valueNode)
-
 	// remove from the existing list
 	currentNode.valuesList.Remove(valueNode.inner)
+
+	newParentNode := newParent.Value.(*FrequencyNode)
+	valueNode.parentFreqNode = newParent
+	newValueNode := newParentNode.valuesList.PushBack(valueNode)
+	valueNode.inner = newValueNode
+
+	// check if the current node is empty
+	if currentNode.valuesList.Len() == 0 {
+		// remove the current node
+		lfu.frequencies.Remove(parentFreqNode)
+	}
+
 	return valueNode.valueRef, true
+}
+
+func (lfu *LFUCache) Delete(key KeyType) error {
+	lfu.rwLock.Lock()
+	defer lfu.rwLock.Unlock()
+
+	// check if the key is in the map
+	valueNode, found := lfu.lookupTable[key]
+	if !found {
+		return fmt.Errorf("key %v not found", key)
+	}
+
+	parentFreqNode := valueNode.parentFreqNode
+
+	currentNode := (parentFreqNode.Value).(*FrequencyNode)
+	currentNode.valuesList.Remove(valueNode.inner)
+
+	if currentNode.valuesList.Len() == 0 {
+		lfu.frequencies.Remove(parentFreqNode)
+	}
+
+	delete(lfu.lookupTable, key)
+	return nil
+}
+
+// obtain the list of all elements in the key lfu cache and their frequencies
+func (lfu *LFUCache) AsSlice() *[]KeyValueEntry {
+	lfu.rwLock.RLock()
+	defer lfu.rwLock.RUnlock()
+
+	valuesList := make([]KeyValueEntry, 0)
+	// remove the current node
+
+	for current := lfu.frequencies.Front(); current != nil; current = current.Next() {
+		currentNode := current.Value.(*FrequencyNode)
+		count := currentNode.count
+		for value := currentNode.valuesList.Front(); value != nil; value = value.Next() {
+			valueNode := (value.Value).(*KeyRefNode)
+			valuesList = append(valuesList, KeyValueEntry{
+				Key:       valueNode.keyRef,
+				Value:     valueNode.valueRef,
+				Frequency: count,
+			})
+		}
+	}
+
+	return &valuesList
+}
+
+// obtain the list of key-value pairs that have highest access frequency
+func (lfu *LFUCache) GetTopFrequencyItems() *[]KeyValueEntry {
+	lfu.rwLock.RLock()
+	defer lfu.rwLock.RUnlock()
+
+	valuesList := make([]KeyValueEntry, 0)
+
+	current := lfu.frequencies.Back()
+	if current == nil {
+		return &valuesList
+	}
+
+	currentNode := current.Value.(*FrequencyNode)
+	count := currentNode.count
+	for value := currentNode.valuesList.Front(); value != nil; value = value.Next() {
+		valueNode := (value.Value).(*KeyRefNode)
+		valuesList = append(valuesList, KeyValueEntry{
+			Key:       valueNode.keyRef,
+			Value:     valueNode.valueRef,
+			Frequency: count,
+		})
+	}
+
+	return &valuesList
+}
+
+// obtain the list of key-value pairs that have lowest access frequency
+func (lfu *LFUCache) GetLeastFrequencyItems() *[]KeyValueEntry {
+	lfu.rwLock.RLock()
+	defer lfu.rwLock.RUnlock()
+
+	valuesList := make([]KeyValueEntry, 0)
+
+	current := lfu.frequencies.Front()
+	if current == nil {
+		return &valuesList
+	}
+
+	currentNode := current.Value.(*FrequencyNode)
+	count := currentNode.count
+	for value := currentNode.valuesList.Front(); value != nil; value = value.Next() {
+		valueNode := (value.Value).(*KeyRefNode)
+		valuesList = append(valuesList, KeyValueEntry{
+			Key:       valueNode.keyRef,
+			Value:     valueNode.valueRef,
+			Frequency: count,
+		})
+	}
+
+	return &valuesList
 }
 
 // create a new instance of LFU cache
