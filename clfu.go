@@ -186,6 +186,52 @@ func (lfu *LFUCache) Evict() error {
 	return lfu.unsafeEvict()
 }
 
+// Get can be called to obtain the value for given key
+func (lfu *LFUCache) Get(key *interface{}) (*ValueType, bool) {
+	lfu.rwLock.Lock()
+	defer lfu.rwLock.Unlock()
+
+	// check if data is in the map
+	valueNode, found := lfu.lookupTable[*key]
+	if !found {
+		return nil, false
+	}
+
+	parentFreqNode := valueNode.parentFreqNode
+	currentNode := parentFreqNode.Value.(*FrequencyNode)
+	nextParentFreqNode := parentFreqNode.Next()
+
+	var newParent *list.Element = nil
+
+	if nextParentFreqNode == nil {
+		// this is the last node
+		// create a new node with frequency + 1
+		newFreqNode := NewFrequencyNode(currentNode.count)
+		lfu.frequencies.PushBack(newFreqNode)
+		newParent = nextParentFreqNode.Next()
+
+	} else {
+		nextNode := nextParentFreqNode.Value.(*FrequencyNode)
+		if nextNode.count == (currentNode.count + 1) {
+			newParent = nextParentFreqNode
+		} else {
+			// insert a node in between
+			newFreqNode := NewFrequencyNode(currentNode.count + 1)
+
+			lfu.frequencies.InsertAfter(newFreqNode, parentFreqNode)
+			newParent = parentFreqNode.Next()
+		}
+	}
+
+	newParentNode := newParent.Value.(*FrequencyNode)
+	valueNode.parentFreqNode = newParent
+	newParentNode.valuesList.PushBack(valueNode)
+
+	// remove from the existing list
+	currentNode.valuesList.Remove(valueNode.inner)
+	return valueNode.valueRef, true
+}
+
 // create a new instance of LFU cache
 func NewLFUCache(maxSize uint) *LFUCache {
 	return &LFUCache{
