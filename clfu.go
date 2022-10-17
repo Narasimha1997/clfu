@@ -1,4 +1,4 @@
-package main
+package clfu
 
 import (
 	"container/list"
