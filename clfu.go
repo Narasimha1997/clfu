@@ -9,24 +9,22 @@ import (
 type ValueType interface{}
 type KeyType interface{}
 
+// `KeyValueEntry` represents an item in the slice representation of LFU cache
 type KeyValueEntry struct {
-	Key       *KeyType
-	Value     *ValueType
-	Frequency uint
+	Key       *KeyType   // pointer to key
+	Value     *ValueType // pointer to value
+	Frequency uint       // frequency of access
 }
 
-// FrequencyNode represents a node in the frequency linked list
+// `FrequencyNode` represents a node in the frequency linked list
 type FrequencyNode struct {
-	// frequency count - never decreases
-	count uint
-	// valuesList contains pointer to the head of values linked list
-	valuesList *list.List
-	// actual content of the next element
-	inner *list.Element
+	count      uint          // frequency count - never decreases
+	valuesList *list.List    // valuesList contains pointer to the head of values linked list
+	inner      *list.Element // actual content of the next element
 }
 
 // creates a new frequency list node with the given count
-func NewFrequencyNode(count uint) *FrequencyNode {
+func newFrequencyNode(count uint) *FrequencyNode {
 	return &FrequencyNode{
 		count:      count,
 		valuesList: list.New(),
@@ -34,19 +32,16 @@ func NewFrequencyNode(count uint) *FrequencyNode {
 	}
 }
 
-// KeyRefNode represents the value held on the LRU cache frequency list node
+// `KeyRefNode`` represents the value held on the LRU cache frequency list node
 type KeyRefNode struct {
-	// contains the actual value wrapped by a list element
-	inner *list.Element
-	// contains reference to the frequency node element
-	parentFreqNode *list.Element
-	// contains pointer to the key
-	keyRef *KeyType
-	// value
-	valueRef *ValueType
+	inner          *list.Element // contains the actual value wrapped by a list element
+	parentFreqNode *list.Element // contains reference to the frequency node element
+	keyRef         *KeyType      // contains pointer to the key
+	valueRef       *ValueType    // value
 }
 
-func NewKeyRefNode(keyRef *KeyType, valueRef *ValueType, parent *list.Element) *KeyRefNode {
+// creates a new KeyRef node which is used to represent the value in linked list
+func newKeyRefNode(keyRef *KeyType, valueRef *ValueType, parent *list.Element) *KeyRefNode {
 	return &KeyRefNode{
 		inner:          nil,
 		parentFreqNode: parent,
@@ -55,19 +50,15 @@ func NewKeyRefNode(keyRef *KeyType, valueRef *ValueType, parent *list.Element) *
 	}
 }
 
-// LFUCache implements all the methods and data-structures required for LFU cache
+// `LFUCache` implements all the methods and data-structures required for LFU cache
 type LFUCache struct {
-	// rwLock is a read-write mutex which provides concurrent reads but exclusive writes
-	rwLock sync.RWMutex
-	// a hash table of <KeyType, *ValueType> for quick reference of values based on keys
-	lookupTable map[KeyType]*KeyRefNode
-	// internal linked list that contains frequency mapping
-	frequencies *list.List
-	// maxSize represents the maximum number of elements that can be in the cache before eviction
-	maxSize uint
+	rwLock      sync.RWMutex            // rwLock is a read-write mutex which provides concurrent reads but exclusive writes
+	lookupTable map[KeyType]*KeyRefNode // a hash table of <KeyType, *ValueType> for quick reference of values based on keys
+	frequencies *list.List              // internal linked list that contains frequency mapping
+	maxSize     uint                    // maxSize represents the maximum number of elements that can be in the cache before eviction
 }
 
-// MaxSize returns the maximum size of the cache at that point in time
+// `MaxSize` returns the maximum size of the cache at that point in time
 func (lfu *LFUCache) MaxSize() uint {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
@@ -75,7 +66,9 @@ func (lfu *LFUCache) MaxSize() uint {
 	return lfu.maxSize
 }
 
-// CurrentSize returns the number of elements in that cache
+// `CurrentSize` returns the number of elements in that cache
+//
+// Returns: `uint` representing the current size
 func (lfu *LFUCache) CurrentSize() uint {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
@@ -83,6 +76,9 @@ func (lfu *LFUCache) CurrentSize() uint {
 	return uint(len(lfu.lookupTable))
 }
 
+// `IsFull` checks if the LFU cache is full
+//
+// Returns (true/false), `true` if LFU cache is full, `false` if LFU cache is not full
 func (lfu *LFUCache) IsFull() bool {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
@@ -90,7 +86,11 @@ func (lfu *LFUCache) IsFull() bool {
 	return uint(len(lfu.lookupTable)) == lfu.maxSize
 }
 
-// customize the max size of the cache
+// `SetMaxSize` updates the max size of the LFU cache
+//
+// Parameters
+//
+// 1. size: `uint` value which specifies the new size of the LFU cache
 func (lfu *LFUCache) SetMaxSize(size uint) {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
@@ -138,6 +138,20 @@ func (lfu *LFUCache) unsafeEvict() error {
 	return nil
 }
 
+// `Put` method inserts a `<KeyType, ValueType>` to the LFU cache and updates internal
+// data structures to keep track of access frequencies, if the cache is full, it evicts the
+// least frequently used value from the cache.
+//
+// Parameters:
+//
+// 1. key: Key is of `KeyType` (or simply an `interface{}`) which represents the key, note that the key must be hashable type.
+//
+// 2. value: Value is of `ValueType` (or simply an `interface{}`) which represents the value
+//
+// 3. replace: replace is a `bool`, if set to `true`, the `value` of the given `key` will be overwritten if exists, if set to
+// `false`, an `error` is thrown if `key` already exists.
+//
+// Returns: `error` if there are any errors during insertions
 func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 	// get write lock
 	lfu.rwLock.Lock()
@@ -157,19 +171,19 @@ func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 		lfu.unsafeEvict()
 	}
 
-	valueNode := NewKeyRefNode(&key, &value, nil)
+	valueNode := newKeyRefNode(&key, &value, nil)
 
 	head := lfu.frequencies.Front()
 	if head == nil {
 		// fresh linked list
-		freqNode := NewFrequencyNode(1)
+		freqNode := newFrequencyNode(1)
 		head = lfu.frequencies.PushFront(freqNode)
 		freqNode.inner = head
 
 	} else {
 		node := head.Value.(*FrequencyNode)
 		if node.count != 1 {
-			freqNode := NewFrequencyNode(1)
+			freqNode := newFrequencyNode(1)
 			head = lfu.frequencies.PushFront(freqNode)
 			freqNode.inner = head
 		}
@@ -184,7 +198,9 @@ func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 	return nil
 }
 
-// Evict can be called to manually perform eviction
+// `Evict` can be called to manually perform eviction
+//
+// Returns: `error` if there are any errors during eviction
 func (lfu *LFUCache) Evict() error {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
@@ -192,7 +208,13 @@ func (lfu *LFUCache) Evict() error {
 	return lfu.unsafeEvict()
 }
 
-// Get can be called to obtain the value for given key
+// `Get` can be called to obtain the value for given key
+//
+// Parameters:
+//
+// key: key: Key is of `KeyType` (or simply an `interface{}`) which represents the key, note that the key must be hashable type
+//
+// Returns: `(*ValueType, bool)` - returns a pointer to the value in LFU cache if `key` exists, else it will be `nil` with `error` non-nil.
 func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
@@ -212,7 +234,7 @@ func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 	if nextParentFreqNode == nil {
 		// this is the last node
 		// create a new node with frequency + 1
-		newFreqNode := NewFrequencyNode(currentNode.count + 1)
+		newFreqNode := newFrequencyNode(currentNode.count + 1)
 		lfu.frequencies.PushBack(newFreqNode)
 		newParent = parentFreqNode.Next()
 
@@ -222,7 +244,7 @@ func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 			newParent = nextParentFreqNode
 		} else {
 			// insert a node in between
-			newFreqNode := NewFrequencyNode(currentNode.count + 1)
+			newFreqNode := newFrequencyNode(currentNode.count + 1)
 
 			lfu.frequencies.InsertAfter(newFreqNode, parentFreqNode)
 			newParent = parentFreqNode.Next()
@@ -246,6 +268,13 @@ func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 	return valueNode.valueRef, true
 }
 
+// `Delete` removes the specified entry from LFU cache
+//
+// Parameters:
+//
+// key: key is of type `KeyType` (or simply `interface{}`) which represents the key to be deleted
+//
+// Returns: `error` which is nil if `key` is deleted, non-nil if there are some errors while deletion
 func (lfu *LFUCache) Delete(key KeyType) error {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
@@ -269,13 +298,15 @@ func (lfu *LFUCache) Delete(key KeyType) error {
 	return nil
 }
 
-// obtain the list of all elements in the key lfu cache and their frequencies
+// `AsSlice` returns the list of all elements in the key lfu cache and their frequencies
+//
+// Returns: a pointer to the slice of `KeyValueEntry` type, which contains the list of elements (key, value and frequency) in the current
+// state of LFU cache.
 func (lfu *LFUCache) AsSlice() *[]KeyValueEntry {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
 
 	valuesList := make([]KeyValueEntry, 0)
-	// remove the current node
 
 	for current := lfu.frequencies.Front(); current != nil; current = current.Next() {
 		currentNode := current.Value.(*FrequencyNode)
@@ -293,7 +324,10 @@ func (lfu *LFUCache) AsSlice() *[]KeyValueEntry {
 	return &valuesList
 }
 
-// obtain the list of key-value pairs that have highest access frequency
+// `GetTopFrequencyItems` returns the list of all elements in the key lfu cache and their frequencies
+//
+// Returns: a pointer to the slice of `KeyValueEntry` type, which contains the list of elements (key, value and frequency) having
+// highest frequency value in the current state of the LFU cache.
 func (lfu *LFUCache) GetTopFrequencyItems() *[]KeyValueEntry {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
@@ -319,7 +353,10 @@ func (lfu *LFUCache) GetTopFrequencyItems() *[]KeyValueEntry {
 	return &valuesList
 }
 
-// obtain the list of key-value pairs that have lowest access frequency
+// `GetLeastFrequencyItems` returns the list of all elements in the key lfu cache and their frequencies
+//
+// Returns: a pointer to the slice of `KeyValueEntry` type, which contains the list of elements (key, value and frequency) having
+// least frequency value in the current state of the LFU cache.
 func (lfu *LFUCache) GetLeastFrequencyItems() *[]KeyValueEntry {
 	lfu.rwLock.RLock()
 	defer lfu.rwLock.RUnlock()
@@ -345,7 +382,13 @@ func (lfu *LFUCache) GetLeastFrequencyItems() *[]KeyValueEntry {
 	return &valuesList
 }
 
-// create a new instance of LFU cache
+// `NewLFUCache` create a new instance of LFU cache returns the new instance of LFU cache with specified size.
+//
+// Parameters:
+//
+// 1. maxSize: `uint` representing the max size of LFU cache.
+//
+// Returns: (*LFUCache) a pointer to LFU cache instance.
 func NewLFUCache(maxSize uint) *LFUCache {
 	return &LFUCache{
 		rwLock:      sync.RWMutex{},
