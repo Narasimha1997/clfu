@@ -174,3 +174,43 @@ func TestDelete(t *testing.T) {
 		}
 	}
 }
+
+func TestLeastAndFrequentItemsGetter(t *testing.T) {
+	lfu := clfu.NewLFUCache(10)
+
+	// insert 1000 elements with replace=false
+	for i := 1; i <= 1000; i++ {
+		err := lfu.Put(i, i, false)
+		if err != nil {
+			t.Fatalf("error while inserting key value paris to LFU cache, error=%s", err.Error())
+		}
+	}
+
+	// verify the elements inserted
+	if lfu.CurrentSize() != 10 {
+		t.Fatalf("expected size of LFU cache was 10, but got %d", lfu.CurrentSize())
+	}
+
+	// increase the frequency of first 5 elements
+	for i := 991; i <= 995; i++ {
+		lfu.Get(i)
+	}
+
+	// least frequency items - 996 to 1000
+	allElements := lfu.GetLeastFrequencyItems()
+	for i := 0; i < 5; i++ {
+		value := (*(*allElements)[i].Value).(int)
+		if value != (i + 996) {
+			t.Fatalf("invalid value in the cache, expected %d, but got %d", i+996, value)
+		}
+	}
+
+	// top frequency items - 991 to 995
+	allElements = lfu.GetTopFrequencyItems()
+	for i := 0; i < 5; i++ {
+		value := (*(*allElements)[i].Value).(int)
+		if value != (i + 991) {
+			t.Fatalf("invalid value in the cache, expected %d, but got %d", i+991, value)
+		}
+	}
+}
