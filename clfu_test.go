@@ -2,6 +2,7 @@ package clfu_test
 
 import (
 	"clfu"
+	"sync"
 	"testing"
 )
 
@@ -212,5 +213,95 @@ func TestLeastAndFrequentItemsGetter(t *testing.T) {
 		if value != (i + 991) {
 			t.Fatalf("invalid value in the cache, expected %d, but got %d", i+991, value)
 		}
+	}
+}
+
+func TestMaxSizeResize(t *testing.T) {
+	lfu := clfu.NewLFUCache(10)
+
+	// insert 1000 elements with replace=false
+	for i := 1; i <= 1000; i++ {
+		err := lfu.Put(i, i, false)
+		if err != nil {
+			t.Fatalf("error while inserting key value paris to LFU cache, error=%s", err.Error())
+		}
+	}
+
+	lfu.SetMaxSize(30)
+	// insert 1000 elements with replace=false
+	for i := 1; i <= 1000; i++ {
+		err := lfu.Put(i, i, false)
+		if err != nil {
+			t.Fatalf("error while inserting key value paris to LFU cache, error=%s", err.Error())
+		}
+	}
+
+	allGood := lfu.MaxSize() == lfu.CurrentSize()
+	if !allGood {
+		t.Fatalf("expected the size of cache be 30, but got %d", lfu.CurrentSize())
+	}
+}
+
+func TestConcurrentPut(t *testing.T) {
+
+	// create a cache with small size
+	lfu := clfu.NewLFUCache(1000)
+
+	// 4 goroutines will be inserting values 1M each
+	insertOp := func(wg *sync.WaitGroup, from int, to int) {
+		defer wg.Done()
+		for i := from; i < to; i++ {
+			lfu.Put(i, i, false)
+		}
+	}
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		start := i * 1000000
+		go insertOp(&wg, start, start+1000000)
+	}
+
+	wg.Wait()
+
+	if lfu.CurrentSize() != 1000 {
+		t.Fatalf("expected the size of cache be 1000, but got %d", lfu.CurrentSize())
+	}
+}
+
+func TestConcurrentGet(t *testing.T) {
+
+	lfu := clfu.NewLFUCache(10000)
+
+	for i := 0; i < 10000; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	// 4 goroutines will be getting values 1M each
+	getOp := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			for j := 0; j < 10000; j++ {
+				lfu.Get(j)
+			}
+		}
+	}
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go getOp(&wg)
+	}
+
+	wg.Wait()
+
+	topElements := lfu.GetTopFrequencyItems()
+
+	// all elements must be accessed 400 times
+	allGood := len(*topElements) == 10000 && ((*topElements)[0].Frequency == 400)
+	if allGood {
+		t.Fatalf("expected all the elements to be accessed 400 times")
 	}
 }
