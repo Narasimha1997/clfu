@@ -329,7 +329,7 @@ func BenchmarkConcurrentPut(b *testing.B) {
 }
 
 func BenchmarkGetOperation(b *testing.B) {
-	lfu := clfu.NewLazyLFUCache(100, 1000000)
+	lfu := clfu.NewLFUCache(100)
 	for i := 0; i < 100; i++ {
 		lfu.Put(i, i, false)
 	}
@@ -340,7 +340,35 @@ func BenchmarkGetOperation(b *testing.B) {
 }
 
 func BenchmarkConcurrentGet(b *testing.B) {
-	lfu := clfu.NewLazyLFUCache(100, 1000000)
+	lfu := clfu.NewLFUCache(100)
+	for i := 0; i < 100; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	i := 0
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+
+			lfu.Get(i % 100)
+			i++
+		}
+	})
+}
+
+func BenchmarkLazyLFUGet(b *testing.B) {
+	lfu := clfu.NewLazyLFUCache(100, 19)
+	for i := 0; i < 100; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	for i := 0; i < b.N; i++ {
+		lfu.Get(i % 100)
+	}
+}
+
+func BenchmarkConcurrentLazyLFUGet(b *testing.B) {
+	lfu := clfu.NewLazyLFUCache(100, 100)
 	for i := 0; i < 100; i++ {
 		lfu.Put(i, i, false)
 	}

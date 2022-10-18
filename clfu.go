@@ -58,14 +58,12 @@ func newKeyRefNode(keyRef *KeyType, valueRef *ValueType, parent *list.Element) *
 
 // `LFUCache` implements all the methods and data-structures required for LFU cache
 type LFUCache struct {
-	rwLock            sync.RWMutex            // rwLock is a read-write mutex which provides concurrent reads but exclusive writes
-	lookupTable       map[KeyType]*KeyRefNode // a hash table of <KeyType, *ValueType> for quick reference of values based on keys
-	frequencies       *list.List              // internal linked list that contains frequency mapping
-	maxSize           uint                    // maxSize represents the maximum number of elements that can be in the cache before eviction
-	isLazy            bool                    // if set to true, the frequency count update will happen lazily
-	lazyCounter       *LFULazyCounter         // contains pointer to lazy counter instance
-	lazyUpdateChannel chan KeyType            // a channel to which lazy updates are sent
-	fullCondition     *sync.Cond              // a conditional local used to denote the lazy update queue is full
+	rwLock      sync.RWMutex            // rwLock is a read-write mutex which provides concurrent reads but exclusive writes
+	lookupTable map[KeyType]*KeyRefNode // a hash table of <KeyType, *ValueType> for quick reference of values based on keys
+	frequencies *list.List              // internal linked list that contains frequency mapping
+	maxSize     uint                    // maxSize represents the maximum number of elements that can be in the cache before eviction
+	isLazy      bool                    // if set to true, the frequency count update will happen lazily
+	lazyCounter *LFULazyCounter         // contains pointer to lazy counter instance
 }
 
 // `MaxSize` returns the maximum size of the cache at that point in time
@@ -226,22 +224,6 @@ func (lfu *LFUCache) Evict() error {
 	return lfu.unsafeEvict()
 }
 
-// lazyListUpdater is started as a goroutine and it's task is to insert entries into lazy list
-func (lfu *LFUCache) lazyListUpdater() {
-
-	for event := range lfu.lazyUpdateChannel {
-
-		lfu.fullCondition.L.Lock()
-		if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
-			lfu.fullCondition.Wait()
-		}
-
-		lfu.lazyCounter.accessList[lfu.lazyCounter.count] = event
-		lfu.lazyCounter.count++
-		lfu.fullCondition.L.Unlock()
-	}
-}
-
 func (lfu *LFUCache) unsafeUpdateFrequency(valueNode *KeyRefNode) {
 	parentFreqNode := valueNode.parentFreqNode
 	currentNode := parentFreqNode.Value.(*FrequencyNode)
@@ -300,12 +282,11 @@ func (lfu *LFUCache) getNoLazy(key KeyType) (*ValueType, bool) {
 }
 
 func (lfu *LFUCache) getLazy(key KeyType) (*ValueType, bool) {
-	lfu.rwLock.RLock()
-	defer lfu.rwLock.RUnlock()
+	lfu.rwLock.Lock()
+	defer lfu.rwLock.Unlock()
 
 	// is lazy update list full?
 	if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
-		lfu.fullCondition.L.Lock()
 		err := lfu.unsafeFlushLazyCounter()
 		if err != nil {
 			return nil, false
@@ -318,7 +299,10 @@ func (lfu *LFUCache) getLazy(key KeyType) (*ValueType, bool) {
 		return nil, false
 	}
 
-	lfu.lazyUpdateChannel <- key
+	// update the lazy counter
+	lfu.lazyCounter.accessList[lfu.lazyCounter.count] = key
+	lfu.lazyCounter.count += 1
+
 	return valueNode.valueRef, true
 }
 
@@ -338,8 +322,6 @@ func (lfu *LFUCache) unsafeFlushLazyCounter() error {
 	}
 
 	lfu.lazyCounter.count = 0
-	lfu.fullCondition.Broadcast()
-	lfu.fullCondition.L.Unlock()
 
 	return nil
 }
@@ -515,16 +497,13 @@ func NewLazyLFUCache(maxSize uint, lazyCounterSize uint) *LFUCache {
 	}
 
 	lfuCache := &LFUCache{
-		rwLock:            sync.RWMutex{},
-		lookupTable:       make(map[KeyType]*KeyRefNode),
-		maxSize:           maxSize,
-		frequencies:       list.New(),
-		isLazy:            true,
-		lazyCounter:       &lazyCounter,
-		lazyUpdateChannel: make(chan KeyType),
-		fullCondition:     sync.NewCond(&sync.Mutex{}),
+		rwLock:      sync.RWMutex{},
+		lookupTable: make(map[KeyType]*KeyRefNode),
+		maxSize:     maxSize,
+		frequencies: list.New(),
+		isLazy:      true,
+		lazyCounter: &lazyCounter,
 	}
 
-	go lfuCache.lazyListUpdater()
 	return lfuCache
 }
