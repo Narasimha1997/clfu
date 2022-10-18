@@ -3,7 +3,151 @@ package main
 import (
 	"clfu"
 	"fmt"
+	"runtime"
+	"sync"
+	"time"
 )
+
+func normal() {
+	lfuCache := clfu.NewLFUCache(1000)
+	for i := 0; i < 1000; i++ {
+		lfuCache.Put(i, i, false)
+	}
+
+	// get the data 4M times and compute the latency
+
+	routine := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 4*1000000; i++ {
+			lfuCache.Get(i % 1000)
+		}
+	}
+
+	wg := sync.WaitGroup{}
+	st := time.Now()
+	// run a goroutine for each CPU
+	for i := 0; i < runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go routine(&wg)
+	}
+
+	wg.Wait()
+
+	et := time.Since(st)
+	fmt.Printf("Normal (lazy not enabled): n_goroutines=%d, n_access=%d, time_taken=%v\n", runtime.NumCPU(), runtime.NumCPU()*4*1000000, et)
+}
+
+func lazy() {
+	lfuCache := clfu.NewLazyLFUCache(1000, 1000)
+	for i := 0; i < 1000; i++ {
+		lfuCache.Put(i, i, false)
+	}
+
+	// get the data 4M times and compute the latency
+
+	routine := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 4*1000000; i++ {
+			lfuCache.Get(i % 1000)
+		}
+	}
+
+	wg := sync.WaitGroup{}
+	st := time.Now()
+	// run a goroutine for each CPU
+	for i := 0; i < runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go routine(&wg)
+	}
+
+	wg.Wait()
+
+	et := time.Since(st)
+	fmt.Printf("Lazy (with size 1000 as cache size): n_goroutines=%d, n_access=%d, time_taken=%v\n", runtime.NumCPU(), runtime.NumCPU()*4*1000000, et)
+}
+
+func timeTaken() {
+	// this function is very compute intensive
+
+	fmt.Println("Checking lazy vs normal execution speeds")
+
+	normal()
+
+	lazy()
+
+}
+
+func averageAccessTimeNormal() {
+	lfuCache := clfu.NewLFUCache(1000)
+	for i := 0; i < 1000; i++ {
+		lfuCache.Put(i, i, false)
+	}
+
+	// get the data 4M times and compute the latency
+	totalTime := 0
+
+	routine := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 4*1000000; i++ {
+			st := time.Now()
+			lfuCache.Get(i % 1000)
+			et := time.Since(st)
+			totalTime += int(et.Nanoseconds())
+		}
+	}
+
+	wg := sync.WaitGroup{}
+	// run a goroutine for each CPU
+	for i := 0; i < runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go routine(&wg)
+	}
+
+	wg.Wait()
+
+	averageTotalTime := totalTime / (4 * 1000000 * runtime.NumCPU())
+	fmt.Printf("Normal: n_goroutines=%d, n_access=%d, average_time_per_access=%v\n", runtime.NumCPU(), runtime.NumCPU()*4*1000000, averageTotalTime)
+}
+
+func averageAccessTimeLazy() {
+	lfuCache := clfu.NewLazyLFUCache(1000, 1000)
+	for i := 0; i < 1000; i++ {
+		lfuCache.Put(i, i, false)
+	}
+
+	// get the data 4M times and compute the latency
+	totalTime := 0
+
+	routine := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 4*1000000; i++ {
+			st := time.Now()
+			lfuCache.Get(i % 1000)
+			et := time.Since(st)
+			totalTime += int(et.Nanoseconds())
+		}
+	}
+
+	wg := sync.WaitGroup{}
+	// run a goroutine for each CPU
+	for i := 0; i < runtime.NumCPU(); i++ {
+		wg.Add(1)
+		go routine(&wg)
+	}
+
+	wg.Wait()
+
+	averageTotalTime := totalTime / (4 * 1000000 * runtime.NumCPU())
+	fmt.Printf("Lazy (with size 1000 as cache size): n_goroutines=%d, n_access=%d, average_time_per_access=%v\n", runtime.NumCPU(), runtime.NumCPU()*4*1000000, averageTotalTime)
+}
+
+func averageAccessTime() {
+	fmt.Println("Checking average access time - lazy vs normal")
+
+	averageAccessTimeNormal()
+
+	averageAccessTimeLazy()
+}
 
 func main() {
 
@@ -46,4 +190,8 @@ func main() {
 	if err != nil {
 		fmt.Printf("failed to delete, no key 'u939804'")
 	}
+
+	// these functions are provided for benchmark purposes
+	timeTaken()
+	averageAccessTime()
 }

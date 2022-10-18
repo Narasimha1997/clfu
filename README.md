@@ -1,2 +1,3 @@
 # clfu
-Implementation of constant time LFU cache in go with concurrency in mind
+Implementation of Constant Time LFU (least frequently used) cache in Go with concurrency safety. This implementation is based on the paper [An O(1) algorithm for implementing the LFU
+cache eviction scheme](http://dhruvbird.com/lfu.pdf) by Prof. Ketan Shah, Anirban Mitra and Dhruv Matani. As opposed to priority heap based LFU cache, this mechanism provides almost O(1) insertion, retrieval and eviction operations. 
