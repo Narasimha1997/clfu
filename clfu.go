@@ -41,7 +41,7 @@ type KeyRefNode struct {
 }
 
 type LFULazyCounter struct {
-	accessList []*KeyType
+	accessList []KeyType
 	count      uint
 	capacity   uint
 }
@@ -58,12 +58,14 @@ func newKeyRefNode(keyRef *KeyType, valueRef *ValueType, parent *list.Element) *
 
 // `LFUCache` implements all the methods and data-structures required for LFU cache
 type LFUCache struct {
-	rwLock      sync.RWMutex            // rwLock is a read-write mutex which provides concurrent reads but exclusive writes
-	lookupTable map[KeyType]*KeyRefNode // a hash table of <KeyType, *ValueType> for quick reference of values based on keys
-	frequencies *list.List              // internal linked list that contains frequency mapping
-	maxSize     uint                    // maxSize represents the maximum number of elements that can be in the cache before eviction
-	isLazy      bool                    // if set to true, the frequency count update will happen lazily
-	lazyCounter *LFULazyCounter         // contains pointer to lazy counter instance
+	rwLock            sync.RWMutex            // rwLock is a read-write mutex which provides concurrent reads but exclusive writes
+	lookupTable       map[KeyType]*KeyRefNode // a hash table of <KeyType, *ValueType> for quick reference of values based on keys
+	frequencies       *list.List              // internal linked list that contains frequency mapping
+	maxSize           uint                    // maxSize represents the maximum number of elements that can be in the cache before eviction
+	isLazy            bool                    // if set to true, the frequency count update will happen lazily
+	lazyCounter       *LFULazyCounter         // contains pointer to lazy counter instance
+	lazyUpdateChannel chan KeyType            // a channel to which lazy updates are sent
+	fullCondition     *sync.Cond              // a conditional local used to denote the lazy update queue is full
 }
 
 // `MaxSize` returns the maximum size of the cache at that point in time
@@ -165,6 +167,10 @@ func (lfu *LFUCache) Put(key KeyType, value ValueType, replace bool) error {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
 
+	if lfu.isLazy && lfu.lazyCounter.count > 0 {
+		lfu.unsafeFlushLazyCounter()
+	}
+
 	if _, ok := lfu.lookupTable[key]; ok {
 		if replace {
 			// update the cache value
@@ -213,10 +219,30 @@ func (lfu *LFUCache) Evict() error {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
 
+	if lfu.isLazy && lfu.lazyCounter.count > 0 {
+		lfu.unsafeFlushLazyCounter()
+	}
+
 	return lfu.unsafeEvict()
 }
 
-func (lfu *LFUCache) updateFrequency(valueNode *KeyRefNode) {
+// lazyListUpdater is started as a goroutine and it's task is to insert entries into lazy list
+func (lfu *LFUCache) lazyListUpdater() {
+
+	for event := range lfu.lazyUpdateChannel {
+
+		lfu.fullCondition.L.Lock()
+		if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
+			lfu.fullCondition.Wait()
+		}
+
+		lfu.lazyCounter.accessList[lfu.lazyCounter.count] = event
+		lfu.lazyCounter.count++
+		lfu.fullCondition.L.Unlock()
+	}
+}
+
+func (lfu *LFUCache) unsafeUpdateFrequency(valueNode *KeyRefNode) {
 	parentFreqNode := valueNode.parentFreqNode
 	currentNode := parentFreqNode.Value.(*FrequencyNode)
 	nextParentFreqNode := parentFreqNode.Next()
@@ -258,14 +284,7 @@ func (lfu *LFUCache) updateFrequency(valueNode *KeyRefNode) {
 	}
 }
 
-// `Get` can be called to obtain the value for given key
-//
-// Parameters:
-//
-// key: key: Key is of `KeyType` (or simply an `interface{}`) which represents the key, note that the key must be hashable type
-//
-// Returns: `(*ValueType, bool)` - returns a pointer to the value in LFU cache if `key` exists, else it will be `nil` with `error` non-nil.
-func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
+func (lfu *LFUCache) getNoLazy(key KeyType) (*ValueType, bool) {
 	lfu.rwLock.Lock()
 	defer lfu.rwLock.Unlock()
 
@@ -275,9 +294,79 @@ func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 		return nil, false
 	}
 
-	lfu.updateFrequency(valueNode)
+	lfu.unsafeUpdateFrequency(valueNode)
 
 	return valueNode.valueRef, true
+}
+
+func (lfu *LFUCache) getLazy(key KeyType) (*ValueType, bool) {
+	lfu.rwLock.RLock()
+	defer lfu.rwLock.RUnlock()
+
+	// is lazy update list full?
+	if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
+		lfu.fullCondition.L.Lock()
+		err := lfu.unsafeFlushLazyCounter()
+		if err != nil {
+			return nil, false
+		}
+	}
+
+	// perform get
+	valueNode, found := lfu.lookupTable[key]
+	if !found {
+		return nil, false
+	}
+
+	lfu.lazyUpdateChannel <- key
+	return valueNode.valueRef, true
+}
+
+// unsafeFlushLazyCounter flushes the updates in lazy counter without locking
+func (lfu *LFUCache) unsafeFlushLazyCounter() error {
+	// WARNING: calling this function directly is not recommended, because
+	// this function assumes caller has a RWLock over the LFU cache.
+
+	for i := 0; i < int(lfu.lazyCounter.count); i++ {
+		key := lfu.lazyCounter.accessList[i]
+		valueNode, found := lfu.lookupTable[key]
+		if !found {
+			return fmt.Errorf("key %v not found", key)
+		}
+
+		lfu.unsafeUpdateFrequency(valueNode)
+	}
+
+	lfu.lazyCounter.count = 0
+	lfu.fullCondition.Broadcast()
+	lfu.fullCondition.L.Unlock()
+
+	return nil
+}
+
+// FlushLazyCounter updates the state LFU cache with pending frequency updates in lazy counter
+//
+// Returns: error if lazy update fails
+func (lfu *LFUCache) FlushLazyCounter() error {
+	lfu.rwLock.Lock()
+	defer lfu.rwLock.Unlock()
+
+	return lfu.unsafeFlushLazyCounter()
+}
+
+// `Get` can be called to obtain the value for given key
+//
+// Parameters:
+//
+// key: key: Key is of `KeyType` (or simply an `interface{}`) which represents the key, note that the key must be hashable type
+//
+// Returns: `(*ValueType, bool)` - returns a pointer to the value in LFU cache if `key` exists, else it will be `nil` with `error` non-nil.
+func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
+	if !lfu.isLazy {
+		return lfu.getNoLazy(key)
+	} else {
+		return lfu.getLazy(key)
+	}
 }
 
 // `Delete` removes the specified entry from LFU cache
@@ -422,15 +511,20 @@ func NewLazyLFUCache(maxSize uint, lazyCounterSize uint) *LFUCache {
 	lazyCounter := LFULazyCounter{
 		count:      0,
 		capacity:   lazyCounterSize,
-		accessList: make([]*KeyType, lazyCounterSize),
+		accessList: make([]KeyType, lazyCounterSize),
 	}
 
-	return &LFUCache{
-		rwLock:      sync.RWMutex{},
-		lookupTable: make(map[KeyType]*KeyRefNode),
-		maxSize:     maxSize,
-		frequencies: list.New(),
-		isLazy:      true,
-		lazyCounter: &lazyCounter,
+	lfuCache := &LFUCache{
+		rwLock:            sync.RWMutex{},
+		lookupTable:       make(map[KeyType]*KeyRefNode),
+		maxSize:           maxSize,
+		frequencies:       list.New(),
+		isLazy:            true,
+		lazyCounter:       &lazyCounter,
+		lazyUpdateChannel: make(chan KeyType),
+		fullCondition:     sync.NewCond(&sync.Mutex{}),
 	}
+
+	go lfuCache.lazyListUpdater()
+	return lfuCache
 }

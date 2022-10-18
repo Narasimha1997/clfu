@@ -272,7 +272,7 @@ func TestConcurrentPut(t *testing.T) {
 
 func TestConcurrentGet(t *testing.T) {
 
-	lfu := clfu.NewLFUCache(10000)
+	lfu := clfu.NewLFUCache(100000)
 
 	for i := 0; i < 10000; i++ {
 		lfu.Put(i, i, false)
@@ -329,7 +329,7 @@ func BenchmarkConcurrentPut(b *testing.B) {
 }
 
 func BenchmarkGetOperation(b *testing.B) {
-	lfu := clfu.NewLFUCache(100)
+	lfu := clfu.NewLazyLFUCache(100, 1000000)
 	for i := 0; i < 100; i++ {
 		lfu.Put(i, i, false)
 	}
@@ -340,7 +340,7 @@ func BenchmarkGetOperation(b *testing.B) {
 }
 
 func BenchmarkConcurrentGet(b *testing.B) {
-	lfu := clfu.NewLFUCache(100)
+	lfu := clfu.NewLazyLFUCache(100, 1000000)
 	for i := 0; i < 100; i++ {
 		lfu.Put(i, i, false)
 	}
