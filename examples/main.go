@@ -149,6 +149,23 @@ func averageAccessTime() {
 	averageAccessTimeLazy()
 }
 
+func allElements() {
+	lfuCache := clfu.NewLFUCache(3)
+
+	// insert some values
+	lfuCache.Put("u939801", 123, false)
+	lfuCache.Put("u939802", 411, false)
+	lfuCache.Put("u939803", 234, false)
+
+	// obtain them as slice
+	entries := lfuCache.AsSlice()
+	for _, entry := range *entries {
+		fmt.Printf("Frequency=%d\n", entry.Frequency)
+		fmt.Printf("Key=%s\n", (*entry.Key).(string))
+		fmt.Printf("Value=%d\n", (*entry.Value).(int))
+	}
+}
+
 func main() {
 
 	// create a new instance of LFU cache with a max size
@@ -194,4 +211,6 @@ func main() {
 	// these functions are provided for benchmark purposes
 	timeTaken()
 	averageAccessTime()
+
+	allElements()
 }
