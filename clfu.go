@@ -266,46 +266,6 @@ func (lfu *LFUCache) unsafeUpdateFrequency(valueNode *KeyRefNode) {
 	}
 }
 
-func (lfu *LFUCache) getNoLazy(key KeyType) (*ValueType, bool) {
-	lfu.rwLock.Lock()
-	defer lfu.rwLock.Unlock()
-
-	// check if data is in the map
-	valueNode, found := lfu.lookupTable[key]
-	if !found {
-		return nil, false
-	}
-
-	lfu.unsafeUpdateFrequency(valueNode)
-
-	return valueNode.valueRef, true
-}
-
-func (lfu *LFUCache) getLazy(key KeyType) (*ValueType, bool) {
-	lfu.rwLock.Lock()
-	defer lfu.rwLock.Unlock()
-
-	// is lazy update list full?
-	if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
-		err := lfu.unsafeFlushLazyCounter()
-		if err != nil {
-			return nil, false
-		}
-	}
-
-	// perform get
-	valueNode, found := lfu.lookupTable[key]
-	if !found {
-		return nil, false
-	}
-
-	// update the lazy counter
-	lfu.lazyCounter.accessList[lfu.lazyCounter.count] = key
-	lfu.lazyCounter.count += 1
-
-	return valueNode.valueRef, true
-}
-
 // unsafeFlushLazyCounter flushes the updates in lazy counter without locking
 func (lfu *LFUCache) unsafeFlushLazyCounter() error {
 	// WARNING: calling this function directly is not recommended, because
@@ -345,9 +305,41 @@ func (lfu *LFUCache) FlushLazyCounter() error {
 // Returns: `(*ValueType, bool)` - returns a pointer to the value in LFU cache if `key` exists, else it will be `nil` with `error` non-nil.
 func (lfu *LFUCache) Get(key KeyType) (*ValueType, bool) {
 	if !lfu.isLazy {
-		return lfu.getNoLazy(key)
+		lfu.rwLock.Lock()
+		defer lfu.rwLock.Unlock()
+
+		// check if data is in the map
+		valueNode, found := lfu.lookupTable[key]
+		if !found {
+			return nil, false
+		}
+
+		lfu.unsafeUpdateFrequency(valueNode)
+
+		return valueNode.valueRef, true
 	} else {
-		return lfu.getLazy(key)
+		lfu.rwLock.Lock()
+		defer lfu.rwLock.Unlock()
+
+		// is lazy update list full?
+		if lfu.lazyCounter.count >= lfu.lazyCounter.capacity {
+			err := lfu.unsafeFlushLazyCounter()
+			if err != nil {
+				return nil, false
+			}
+		}
+
+		// perform get
+		valueNode, found := lfu.lookupTable[key]
+		if !found {
+			return nil, false
+		}
+
+		// update the lazy counter
+		lfu.lazyCounter.accessList[lfu.lazyCounter.count] = key
+		lfu.lazyCounter.count += 1
+
+		return valueNode.valueRef, true
 	}
 }
 

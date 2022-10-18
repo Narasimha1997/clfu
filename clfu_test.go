@@ -306,6 +306,44 @@ func TestConcurrentGet(t *testing.T) {
 	}
 }
 
+func TestConcurrentLazyGet(t *testing.T) {
+
+	lfu := clfu.NewLazyLFUCache(100000, 1000)
+
+	for i := 0; i < 10000; i++ {
+		lfu.Put(i, i, false)
+	}
+
+	// 4 goroutines will be getting values 1M each
+	getOp := func(wg *sync.WaitGroup) {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			for j := 0; j < 10000; j++ {
+				lfu.Get(j)
+			}
+		}
+	}
+
+	wg := sync.WaitGroup{}
+
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go getOp(&wg)
+	}
+
+	wg.Wait()
+
+	lfu.FlushLazyCounter()
+
+	topElements := lfu.GetTopFrequencyItems()
+
+	// all elements must be accessed 400 times
+	allGood := len(*topElements) == 10000 && ((*topElements)[0].Frequency == 400)
+	if allGood {
+		t.Fatalf("expected all the elements to be accessed 400 times")
+	}
+}
+
 func BenchmarkPut(b *testing.B) {
 	lfu := clfu.NewLFUCache(1000)
 	// insert 10M elements
